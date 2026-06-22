@@ -217,8 +217,6 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
     } catch (err) {
       setError(err.message);
     }
-  };ge);
-    }
   };
 
   const handleSubmit = async (e) => {
