@@ -29,6 +29,26 @@ export async function clearAllData() {
   return { financialYears: {}, activeYear: null };
 }
 
+// ── Backup / Restore ──────────────────────────────────────────
+
+export function downloadBackup() {
+  // Trigger a direct browser download from the backend
+  const a = document.createElement('a');
+  a.href = `${API_BASE}/backup`;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+export async function restoreBackup(jsonData) {
+  const raw = await apiFetch('/restore', {
+    method: 'POST',
+    body: JSON.stringify(jsonData),
+  });
+  return normalizeRoot(raw);
+}
+
 // ── Year Operations ───────────────────────────────────────────
 
 export async function createFinancialYear(year) {

@@ -1,9 +1,9 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   loadRoot, clearAllData,
   getActiveYearData,
   createFinancialYear, switchYear, deleteFinancialYear,
-  initializeSanction,
+  initializeSanction, downloadBackup, restoreBackup,
 } from './store/budgetStore';
 import SanctionSetup from './components/SanctionSetup';
 import Dashboard from './components/Dashboard';
@@ -33,6 +33,13 @@ export default function App() {
   const [deleteYearConfirm, setDeleteYearConfirm] = useState(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
+  // Backup & Restore
+  const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [restoreFile, setRestoreFile] = useState(null);   // parsed JSON
+  const [restoreFileName, setRestoreFileName] = useState('');
+  const [restoreError, setRestoreError] = useState('');
+  const [isRestoring, setIsRestoring] = useState(false);
+  const restoreInputRef = useRef(null);
 
   // ── Initial load ──────────────────────────────────────────────
   useEffect(() => {
@@ -101,6 +108,45 @@ export default function App() {
       setShowResetConfirm(false);
       setActivePage('dashboard');
     });
+  };
+
+  // ── Restore file picker ───────────────────────────────────────
+  const handleRestoreFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    setRestoreError('');
+    setRestoreFile(null);
+    setRestoreFileName(file?.name || '');
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!parsed?.financialYears) throw new Error('Missing financialYears key.');
+        setRestoreFile(parsed);
+      } catch (err) {
+        setRestoreError(`Invalid backup file: ${err.message}`);
+      }
+    };
+    reader.onerror = () => setRestoreError('Could not read the file.');
+    reader.readAsText(file);
+  };
+
+  const handleRestoreConfirm = async () => {
+    if (!restoreFile) return;
+    setIsRestoring(true);
+    setRestoreError('');
+    try {
+      const newRoot = await restoreBackup(restoreFile);
+      setRoot(newRoot);
+      setShowRestoreModal(false);
+      setRestoreFile(null);
+      setRestoreFileName('');
+      setActivePage('dashboard');
+    } catch (err) {
+      setRestoreError(err.message);
+    } finally {
+      setIsRestoring(false);
+    }
   };
 
   const renderPage = () => {
@@ -246,6 +292,22 @@ export default function App() {
           <p style={{ fontSize: '0.65rem', color: 'rgba(247,250,239,0.66)' }}>
             SQLite Database · Data persists on disk
           </p>
+          <button
+            id="backup-btn"
+            className="btn btn-ghost btn-sm"
+            style={{ color: 'rgba(99,202,183,0.9)', borderColor: 'rgba(99,202,183,0.2)', width: '100%', fontSize: '0.68rem', padding: '4px 6px' }}
+            onClick={downloadBackup}
+          >
+            📤 Backup Data
+          </button>
+          <button
+            id="restore-btn"
+            className="btn btn-ghost btn-sm"
+            style={{ color: 'rgba(139,174,254,0.9)', borderColor: 'rgba(139,174,254,0.2)', width: '100%', fontSize: '0.68rem', padding: '4px 6px' }}
+            onClick={() => { setShowRestoreModal(true); setRestoreError(''); setRestoreFile(null); setRestoreFileName(''); }}
+          >
+            📥 Restore Backup
+          </button>
           <button
             id="reset-all-data-btn"
             className="btn btn-ghost btn-sm"
@@ -397,6 +459,76 @@ export default function App() {
                 {isMutating ? '⏳ Clearing...' : '🚨 Yes, Delete Everything'}
               </button>
               <button className="btn btn-ghost" onClick={() => setShowResetConfirm(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restore Backup Modal */}
+      {showRestoreModal && (
+        <div className="modal-overlay" onClick={() => setShowRestoreModal(false)}>
+          <div className="modal-box" style={{ maxWidth: '480px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">📥 Restore from Backup</h3>
+              <button className="modal-close" onClick={() => setShowRestoreModal(false)}>✕</button>
+            </div>
+
+            <div className="alert alert-danger" style={{ marginBottom: '1.25rem' }}>
+              <span>⚠️</span>
+              <span><strong>Warning:</strong> Restoring will overwrite ALL current data with the backup. This cannot be undone.</span>
+            </div>
+
+            {/* File picker */}
+            <input
+              ref={restoreInputRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: 'none' }}
+              onChange={handleRestoreFileSelect}
+            />
+            <button
+              className="btn btn-ghost"
+              style={{ width: '100%', marginBottom: '0.75rem', borderStyle: 'dashed', color: 'rgba(139,174,254,0.9)', borderColor: 'rgba(139,174,254,0.3)' }}
+              onClick={() => restoreInputRef.current?.click()}
+            >
+              {restoreFileName ? `📄 ${restoreFileName}` : '📂 Choose backup file (.json)'}
+            </button>
+
+            {/* Preview */}
+            {restoreFile && (
+              <div style={{ background: 'var(--clr-surface-2)', borderRadius: 'var(--r-sm)', padding: '0.875rem', marginBottom: '1rem', fontSize: '0.8rem' }}>
+                <p style={{ fontWeight: 700, marginBottom: '0.5rem', color: 'var(--clr-text)' }}>📋 Backup Contents:</p>
+                <p style={{ color: 'var(--clr-text-subtle)' }}>
+                  Exported on: <strong style={{ color: 'var(--clr-text)' }}>{restoreFile.exportedAt ? new Date(restoreFile.exportedAt).toLocaleString() : 'Unknown'}</strong>
+                </p>
+                <p style={{ color: 'var(--clr-text-subtle)', marginTop: '0.25rem' }}>
+                  Financial years: <strong style={{ color: 'var(--clr-text)' }}>{Object.keys(restoreFile.financialYears || {}).join(', ') || 'None'}</strong>
+                </p>
+                <p style={{ color: 'var(--clr-text-subtle)', marginTop: '0.25rem' }}>
+                  Total transactions: <strong style={{ color: 'var(--clr-text)' }}>
+                    {Object.values(restoreFile.financialYears || {}).reduce((s, y) => s + (y.transactions?.length || 0), 0)}
+                  </strong>
+                </p>
+              </div>
+            )}
+
+            {restoreError && (
+              <div className="alert alert-danger" style={{ marginBottom: '1rem' }}>
+                <span>⚠️</span><span>{restoreError}</span>
+              </div>
+            )}
+
+            <div className="flex gap-md">
+              <button
+                id="confirm-restore-btn"
+                className="btn btn-primary"
+                disabled={!restoreFile || isRestoring}
+                onClick={handleRestoreConfirm}
+                style={{ flex: 1 }}
+              >
+                {isRestoring ? '⏳ Restoring...' : '📥 Restore Now'}
+              </button>
+              <button className="btn btn-ghost" onClick={() => setShowRestoreModal(false)}>Cancel</button>
             </div>
           </div>
         </div>
