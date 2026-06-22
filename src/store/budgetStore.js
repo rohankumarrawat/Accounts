@@ -522,6 +522,14 @@ export function formatAmount(amount) {
   }).format(amount);
 }
 
+export function formatAmountNoDecimals(amount) {
+  if (amount === undefined || amount === null || isNaN(amount)) return '0';
+  return new Intl.NumberFormat('en-IN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(amount);
+}
+
 export function formatAmountShort(amount) {
   if (!amount || isNaN(amount)) return '₹0';
   if (amount >= 10000000) return `₹${(amount / 10000000).toFixed(2)} Cr`;

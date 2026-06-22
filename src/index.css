@@ -279,7 +279,7 @@ body {
   background: var(--grad-card);
   border: 1px solid var(--clr-border);
   border-radius: var(--r-lg);
-  padding: var(--sp-lg);
+  padding: 1.15rem;
   transition: all var(--tr-base);
   position: relative;
   overflow: hidden;
@@ -319,12 +319,13 @@ body {
 }
 
 .stat-value {
-  font-size: 1.6rem;
+  font-size: 1.35rem;
   font-weight: 800;
   color: var(--clr-text);
   letter-spacing: -0.03em;
   line-height: 1;
   margin-bottom: var(--sp-xs);
+  white-space: nowrap;
 }
 
 .stat-value.blue { color: var(--clr-primary-light); }

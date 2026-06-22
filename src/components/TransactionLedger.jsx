@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import {
-  formatAmount, deleteTransaction, editTransaction,
+  formatAmount, formatAmountNoDecimals, deleteTransaction, editTransaction,
   getTransactionTotalAmount, getTransactionWorkingAmount, getTransactionCdaAmount,
   getTotalBillAmount, getTotalSpent, CODE_HEAD_SPLIT_MODES, getCodeHeadSplitMode,
 } from '../store/budgetStore';
@@ -100,16 +100,16 @@ export default function TransactionLedger({ state: yd, root, year, onRootChange 
         </div>
         <div className="stat-card">
           <div className="stat-label">Total Paid Out</div>
-          <div className="stat-value danger">₹{formatAmount(totalAll)}</div>
+          <div className="stat-value danger">₹{formatAmountNoDecimals(totalAll)}</div>
         </div>
         <div className="stat-card green">
           <div className="stat-label">Imprest Balance</div>
-          <div className="stat-value green">₹{formatAmount(yd.workingFunds - workingSpent)}</div>
+          <div className="stat-value green">₹{formatAmountNoDecimals(yd.workingFunds - workingSpent)}</div>
         </div>
         {(filterCH || search) && (
           <div className="stat-card warning">
             <div className="stat-label">Filtered Total</div>
-            <div className="stat-value warning">₹{formatAmount(totalFiltered)}</div>
+            <div className="stat-value warning">₹{formatAmountNoDecimals(totalFiltered)}</div>
             <div className="stat-sub">{transactions.length} records</div>
           </div>
         )}

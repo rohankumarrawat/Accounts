@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   formatAmount,
+  formatAmountNoDecimals,
   recordBankTransfer,
   approveBankTransfer,
   rejectBankTransfer,
@@ -181,7 +182,7 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
         <div className="stat-card green">
           <div className="stat-icon">🏦</div>
           <div className="stat-label">Army Bank Balance</div>
-          <div className={`stat-value ${bankBalance < 0 ? 'danger' : 'green'}`}>₹{formatAmount(bankBalance)}</div>
+          <div className={`stat-value ${bankBalance < 0 ? 'danger' : 'green'}`}>₹{formatAmountNoDecimals(bankBalance)}</div>
           <div className="stat-sub">Cash available for Working Funds payments</div>
         </div>
         <div className={`stat-card ${bankStatus.badge === 'badge-danger' ? 'danger' : bankStatus.badge === 'badge-warning' ? 'warning' : ''}`}>
@@ -190,24 +191,24 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
           <div className={`stat-value ${bankStatus.badge === 'badge-danger' ? 'danger' : bankStatus.badge === 'badge-warning' ? 'warning' : 'blue'}`}>
             {bankStatus.label}
           </div>
-          <div className="stat-sub">Max ₹{formatAmount(BANK_BALANCE_LIMIT)}</div>
+          <div className="stat-sub">Max ₹{formatAmountNoDecimals(BANK_BALANCE_LIMIT)}</div>
         </div>
         <div className="stat-card">
           <div className="stat-icon">🏛️</div>
           <div className="stat-label">CDA Working Funds Held</div>
-          <div className={`stat-value ${cdaWorkingBalance < 0 ? 'danger' : 'blue'}`}>₹{formatAmount(cdaWorkingBalance)}</div>
+          <div className={`stat-value ${cdaWorkingBalance < 0 ? 'danger' : 'blue'}`}>₹{formatAmountNoDecimals(cdaWorkingBalance)}</div>
           <div className="stat-sub">Can still be requested from CDA</div>
         </div>
         <div className="stat-card">
           <div className="stat-icon">📥</div>
           <div className="stat-label">Requested From CDA</div>
-          <div className="stat-value accent">₹{formatAmount(totalRequested)}</div>
+          <div className="stat-value accent">₹{formatAmountNoDecimals(totalRequested)}</div>
           <div className="stat-sub">Cumulative transfers to bank</div>
         </div>
         <div className="stat-card danger">
           <div className="stat-icon">📤</div>
           <div className="stat-label">Working Funds Paid</div>
-          <div className="stat-value danger">₹{formatAmount(workingPaid)}</div>
+          <div className="stat-value danger">₹{formatAmountNoDecimals(workingPaid)}</div>
           <div className="stat-sub">Debited from army bank</div>
         </div>
       </div>
