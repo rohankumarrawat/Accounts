@@ -21,10 +21,9 @@ import {
 const emptyRequest = () => ({
   date: new Date().toISOString().split('T')[0],
   requestNo: '',
-  codeHeadId: '',
+  items: [{ codeHeadId: '', amount: '' }],
   requestedBy: '',
   purpose: '',
-  amount: '',
   remarks: '',
 });
 
@@ -40,7 +39,7 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
   const cdaBalance = getCdaBalance(yd);
   const bankLimitRemaining = getBankLimitRemaining(yd);
   const bankStatus = getBankLimitStatus(yd);
-  const requestAmount = parseFloat(form.amount) || 0;
+  const requestAmount = form.items.reduce((s, item) => s + (parseFloat(item.amount) || 0), 0);
   
   const pendingTransfers = (yd.bankTransfers || []).filter(t => t.status === 'pending');
   const approvedTransfers = (yd.bankTransfers || []).filter(t => t.status === 'approved');
@@ -52,17 +51,40 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
   const bankLimitAfter = BANK_BALANCE_LIMIT - bankAfter;
   const ledgerRows = getBankLedgerRows(yd);
   const codeHeads = yd.codeHeads || [];
-  const selectedCodeHead = codeHeads.find(ch => ch.id === form.codeHeadId);
-  const selectedStats = selectedCodeHead ? getCodeHeadStats(yd, selectedCodeHead.id) : null;
-  const codeHeadAvailable = form.codeHeadId ? getCodeHeadCdaWorkingBalance(yd, form.codeHeadId) : 0;
-  const codeHeadBankBalance = form.codeHeadId ? getCodeHeadBankBalance(yd, form.codeHeadId) : 0;
-  const codeHeadAfter = codeHeadAvailable - requestAmount;
   const requestableCodeHeads = codeHeads.filter(ch => getCodeHeadStats(yd, ch.id).workingAllocated > 0);
 
   const handleChange = (field, value) => {
     setError('');
     setSuccess('');
     setForm(prev => ({ ...prev, [field]: value }));
+  };
+
+  const addItemRow = () => {
+    setForm(prev => ({
+      ...prev,
+      items: [...prev.items, { codeHeadId: '', amount: '' }]
+    }));
+  };
+
+  const removeItemRow = (index) => {
+    setForm(prev => ({
+      ...prev,
+      items: prev.items.filter((_, idx) => idx !== index)
+    }));
+  };
+
+  const handleItemChange = (index, field, value) => {
+    setError('');
+    setSuccess('');
+    setForm(prev => {
+      const newItems = prev.items.map((item, idx) => {
+        if (idx === index) {
+          return { ...item, [field]: value };
+        }
+        return item;
+      });
+      return { ...prev, items: newItems };
+    });
   };
 
   const handleApprove = async (id, amount) => {
@@ -89,26 +111,52 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.codeHeadId) { setError('Please select the code head for this bank request.'); return; }
     if (!form.requestedBy.trim()) { setError('Requested by is required.'); return; }
-    if (!form.amount || requestAmount <= 0) { setError('Enter a valid request amount.'); return; }
-    if (requestAmount > codeHeadAvailable) {
-      setError(`Request exceeds selected code head limit. Available: ₹${formatAmount(codeHeadAvailable)}.`);
-      return;
+    if (!form.items || form.items.length === 0) { setError('At least one request item is required.'); return; }
+    
+    // Check for empty fields or invalid values in items
+    const selectedHeads = new Set();
+    for (let i = 0; i < form.items.length; i++) {
+      const item = form.items[i];
+      if (!item.codeHeadId) {
+        setError(`Please select a code head for row ${i + 1}.`);
+        return;
+      }
+      if (selectedHeads.has(item.codeHeadId)) {
+        const duplicateHead = codeHeads.find(ch => ch.id === item.codeHeadId);
+        setError(`Duplicate code head selected: "${duplicateHead?.name || item.codeHeadId}" is requested multiple times. Please combine them into a single row.`);
+        return;
+      }
+      selectedHeads.add(item.codeHeadId);
+
+      const parsedAmt = parseFloat(item.amount);
+      if (isNaN(parsedAmt) || parsedAmt <= 0) {
+        setError(`Please enter a valid amount greater than zero for row ${i + 1}.`);
+        return;
+      }
+
+      // Check code head availability
+      const codeHeadAvailable = getCodeHeadCdaWorkingBalance(yd, item.codeHeadId);
+      if (parsedAmt > codeHeadAvailable) {
+        const head = codeHeads.find(ch => ch.id === item.codeHeadId);
+        setError(`Request amount for "${head?.name || item.codeHeadId}" (₹${formatAmount(parsedAmt)}) exceeds its available limit of ₹${formatAmount(codeHeadAvailable)}.`);
+        return;
+      }
     }
+
     if (requestAmount > cdaWorkingBalance) {
-      setError(`Request exceeds Working Funds available with CDA (₹${formatAmount(cdaWorkingBalance)}).`);
+      setError(`Total request (₹${formatAmount(requestAmount)}) exceeds Working Funds available with CDA (₹${formatAmount(cdaWorkingBalance)}).`);
       return;
     }
     if (requestAmount > netLimitRemaining) {
-      setError(`Request exceeds army bank limit. Available bank capacity (accounting for pending requests) is ₹${formatAmount(netLimitRemaining)} and max bank balance is ₹${formatAmount(BANK_BALANCE_LIMIT)}.`);
+      setError(`Total request (₹${formatAmount(requestAmount)}) exceeds army bank limit. Available bank capacity (accounting for pending requests) is ₹${formatAmount(netLimitRemaining)} and max bank balance is ₹${formatAmount(BANK_BALANCE_LIMIT)}.`);
       return;
     }
 
     try {
       const newRoot = await recordBankTransfer(year, form);
       onRootChange(newRoot);
-      setSuccess(`Requisition request of ₹${formatAmount(requestAmount)} submitted for approval.`);
+      setSuccess(`Requisition request for a total of ₹${formatAmount(requestAmount)} submitted for approval.`);
       setForm(emptyRequest());
     } catch (e) {
       setError(e.message);
@@ -185,51 +233,89 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
                 <input id="bank-request-no" className="form-input" placeholder="Auto if blank"
                   value={form.requestNo} onChange={e => handleChange('requestNo', e.target.value)} />
               </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label" htmlFor="bank-code-head">Code Head *</label>
-              <select id="bank-code-head" className="form-select"
-                value={form.codeHeadId} onChange={e => handleChange('codeHeadId', e.target.value)}>
-                <option value="">— Select Code Head —</option>
-                {requestableCodeHeads.map(ch => {
-                  const stats = getCodeHeadStats(yd, ch.id);
-                  return (
-                    <option key={ch.id} value={ch.id} disabled={stats.cdaWorkingBalance <= 0}>
-                      {ch.icon} {ch.name} ({ch.code}) - Available: ₹{formatAmount(stats.cdaWorkingBalance)}
-                    </option>
-                  );
-                })}
-              </select>
-              <span className="form-hint">Funds requested from CDA will be earmarked to this code head.</span>
-            </div>
-
-            <div className="form-row">
               <div className="form-group">
                 <label className="form-label" htmlFor="bank-requested-by">Requested By *</label>
                 <input id="bank-requested-by" className="form-input" placeholder="Army personnel / section"
                   value={form.requestedBy} onChange={e => handleChange('requestedBy', e.target.value)} />
               </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="bank-request-amount">Amount (₹) *</label>
-                <input id="bank-request-amount" type="number" className="form-input" min="0.01" step="any"
-                  placeholder="Enter amount to add to bank"
-                  value={form.amount} onChange={e => handleChange('amount', e.target.value)} />
-                {form.amount && (
-                  <span className="form-hint" style={{ color: codeHeadAfter < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' }}>
-                    Code head CDA balance after request: ₹{formatAmount(codeHeadAfter)} {codeHeadAfter < 0 ? '⚠️ Exceeds code head limit' : '✓ Within code head limit'}
-                  </span>
-                )}
-                {form.amount && (
-                  <span className="form-hint" style={{ color: cdaWorkingAfter < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' }}>
-                    CDA Working Funds after request: ₹{formatAmount(cdaWorkingAfter)} {cdaWorkingAfter < 0 ? '⚠️ Exceeds limit' : '✓ Within limit'}
-                  </span>
-                )}
-                {form.amount && (
-                  <span className="form-hint" style={{ color: bankLimitAfter < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' }}>
-                    Bank limit capacity after request: ₹{formatAmount(bankLimitAfter)} {bankLimitAfter < 0 ? '⚠️ Exceeds ₹7.50 Cr bank limit' : '✓ Within bank limit'}
-                  </span>
-                )}
+            </div>
+
+            <div style={{ marginTop: '1.25rem', marginBottom: '1.25rem' }}>
+              <div className="flex justify-between items-center" style={{ marginBottom: '0.5rem' }}>
+                <label className="form-label" style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: 0 }}>
+                  Requested Heads and Amounts *
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={addItemRow}
+                  style={{ color: 'var(--clr-primary)', fontWeight: 600, padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}
+                >
+                  ➕ Add Code Head Row
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {form.items.map((item, idx) => {
+                  const itemAmt = parseFloat(item.amount) || 0;
+                  const itemCHAvailable = item.codeHeadId ? getCodeHeadCdaWorkingBalance(yd, item.codeHeadId) : 0;
+                  const itemCHAfter = itemCHAvailable - itemAmt;
+
+                  return (
+                    <div key={idx} className="card-glass" style={{ padding: '0.75rem', border: '1px solid var(--clr-border)' }}>
+                      <div className="flex gap-md" style={{ alignItems: 'flex-start' }}>
+                        <div className="form-group" style={{ flex: 2, marginBottom: 0 }}>
+                          <select
+                            className="form-select"
+                            value={item.codeHeadId}
+                            onChange={e => handleItemChange(idx, 'codeHeadId', e.target.value)}
+                          >
+                            <option value="">— Select Code Head —</option>
+                            {requestableCodeHeads.map(ch => {
+                              const stats = getCodeHeadStats(yd, ch.id);
+                              const isAlreadySelected = form.items.some((otherItem, otherIdx) => otherIdx !== idx && otherItem.codeHeadId === ch.id);
+                              return (
+                                <option key={ch.id} value={ch.id} disabled={stats.cdaWorkingBalance <= 0 || isAlreadySelected}>
+                                  {ch.icon} {ch.name} ({ch.code}) - Avail: ₹{formatAmount(stats.cdaWorkingBalance)}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+                        <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+                          <input
+                            type="number"
+                            className="form-input"
+                            min="0.01"
+                            step="any"
+                            placeholder="Amount (₹)"
+                            value={item.amount}
+                            onChange={e => handleItemChange(idx, 'amount', e.target.value)}
+                          />
+                        </div>
+                        {form.items.length > 1 && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            onClick={() => removeItemRow(idx)}
+                            style={{ padding: '0.5rem', color: 'var(--clr-danger)', marginTop: '2px' }}
+                            title="Remove this head"
+                          >
+                            🗑️
+                          </button>
+                        )}
+                      </div>
+
+                      {item.amount && item.codeHeadId && (
+                        <div className="flex justify-between items-center" style={{ marginTop: '0.4rem', fontSize: '0.75rem' }}>
+                          <span style={{ color: itemCHAfter < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' }}>
+                            CDA balance after request: ₹{formatAmount(itemCHAfter)} {itemCHAfter < 0 ? '⚠️ Exceeds limit' : '✓ OK'}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -247,23 +333,29 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
             </div>
 
             <div className="card-glass" style={{ padding: '1rem' }}>
-              {selectedCodeHead && (
-                <>
-                  <div className="flex justify-between items-center" style={{ paddingBottom: '0.5rem', borderBottom: '1px solid var(--clr-border)' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--clr-text-muted)' }}>Selected Code Head</span>
-                    <strong>{selectedCodeHead.icon} {selectedCodeHead.name}</strong>
-                  </div>
-                  <div className="flex justify-between items-center" style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--clr-border)' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--clr-text-muted)' }}>Code Head Bank Balance</span>
-                    <strong>₹{formatAmount(codeHeadBankBalance)}</strong>
-                  </div>
-                  <div className="flex justify-between items-center" style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--clr-border)' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--clr-text-muted)' }}>Code Head Request Limit</span>
-                    <strong>₹{formatAmount(codeHeadAvailable)}</strong>
-                  </div>
-                </>
+              <h4 className="form-label" style={{ fontWeight: 700, borderBottom: '1px solid var(--clr-border)', paddingBottom: '0.5rem', marginBottom: '0.5rem' }}>
+                Request Summary
+              </h4>
+              {form.items.some(item => item.codeHeadId && parseFloat(item.amount) > 0) && (
+                <div style={{ marginBottom: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  {form.items.map((item, idx) => {
+                    const ch = codeHeads.find(c => c.id === item.codeHeadId);
+                    const amt = parseFloat(item.amount) || 0;
+                    if (!ch || amt <= 0) return null;
+                    return (
+                      <div key={idx} className="flex justify-between items-center" style={{ fontSize: '0.8rem', color: 'var(--clr-text-subtle)' }}>
+                        <span>{ch.icon} {ch.code} - {ch.name}</span>
+                        <span>₹{formatAmount(amt)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
-              <div className="flex justify-between items-center" style={{ paddingBottom: '0.5rem', borderBottom: '1px solid var(--clr-border)' }}>
+              <div className="flex justify-between items-center" style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--clr-border)', borderTop: '1px solid var(--clr-border)' }}>
+                <strong>Total Request Amount</strong>
+                <strong style={{ color: 'var(--clr-accent)', fontSize: '1rem' }}>₹{formatAmount(requestAmount)}</strong>
+              </div>
+              <div className="flex justify-between items-center" style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--clr-border)' }}>
                 <span style={{ fontSize: '0.8rem', color: 'var(--clr-text-muted)' }}>Current Bank Balance</span>
                 <strong>₹{formatAmount(bankBalance)}</strong>
               </div>
@@ -271,9 +363,17 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
                 <span style={{ fontSize: '0.8rem', color: 'var(--clr-text-muted)' }}>Maximum Bank Balance</span>
                 <strong>₹{formatAmount(BANK_BALANCE_LIMIT)}</strong>
               </div>
-              <div className="flex justify-between items-center" style={{ paddingTop: '0.5rem' }}>
+              <div className="flex justify-between items-center" style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--clr-border)' }}>
                 <span style={{ fontSize: '0.8rem', color: 'var(--clr-text-muted)' }}>Bank Balance After Request</span>
-                <strong style={{ color: bankAfter > BANK_BALANCE_LIMIT ? 'var(--clr-danger)' : 'var(--clr-success)' }}>₹{formatAmount(bankAfter)}</strong>
+                <strong style={{ color: bankAfter > BANK_BALANCE_LIMIT ? 'var(--clr-danger)' : 'var(--clr-success)' }}>
+                  ₹{formatAmount(bankAfter)} {bankAfter > BANK_BALANCE_LIMIT ? '⚠️ Over limit' : ''}
+                </strong>
+              </div>
+              <div className="flex justify-between items-center" style={{ paddingTop: '0.5rem' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--clr-text-muted)' }}>CDA Working Funds After Request</span>
+                <strong style={{ color: cdaWorkingAfter < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' }}>
+                  ₹{formatAmount(cdaWorkingAfter)} {cdaWorkingAfter < 0 ? '⚠️ Insufficient funds' : ''}
+                </strong>
               </div>
             </div>
 
@@ -302,23 +402,36 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
               <span style={{ fontWeight: 700, color: item.color }}>₹{formatAmount(item.value)}</span>
             </div>
           ))}
-          {selectedStats && (
+          {form.items.some(item => item.codeHeadId) && (
             <div style={{ marginTop: '1rem' }}>
-              <h4 className="form-label" style={{ marginBottom: '0.5rem' }}>Selected Code Head Control</h4>
-              {[
-                { label: 'Working Share', value: selectedStats.workingAllocated, color: 'var(--clr-primary-light)' },
-                { label: 'Requested to Bank', value: selectedStats.bankTransferred, color: 'var(--clr-accent)' },
-                { label: 'Available With CDA', value: selectedStats.cdaWorkingBalance, color: selectedStats.cdaWorkingBalance < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' },
-                { label: 'Bank Balance', value: selectedStats.bankBalance, color: selectedStats.bankBalance < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' },
-                { label: 'Working Funds Paid', value: selectedStats.spent, color: 'var(--clr-danger)' },
-                { label: 'CFL', value: selectedStats.cfl, color: selectedStats.cfl < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' },
-              ].map(item => (
-                <div key={item.label} className="flex justify-between items-center"
-                  style={{ padding: '0.45rem 0', borderBottom: '1px solid var(--clr-border)' }}>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--clr-text-muted)' }}>{item.label}</span>
-                  <span style={{ fontWeight: 700, color: item.color }}>₹{formatAmount(item.value)}</span>
-                </div>
-              ))}
+              <h4 className="form-label" style={{ marginBottom: '0.5rem' }}>Active Code Head Details</h4>
+              {form.items.map((item, idx) => {
+                const ch = codeHeads.find(c => c.id === item.codeHeadId);
+                if (!ch) return null;
+                const stats = getCodeHeadStats(yd, ch.id);
+                return (
+                  <details key={ch.id} open style={{ marginBottom: '0.75rem', border: '1px solid var(--clr-border)', borderRadius: '4px', padding: '0.5rem' }}>
+                    <summary style={{ fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem', color: 'var(--clr-text)' }}>
+                      {ch.icon} {ch.code} ({ch.name.substring(0, 20)}...)
+                    </summary>
+                    <div style={{ marginTop: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                      {[
+                        { label: 'Working Share', value: stats.workingAllocated, color: 'var(--clr-primary-light)' },
+                        { label: 'Requested to Bank', value: stats.bankTransferred, color: 'var(--clr-accent)' },
+                        { label: 'Available With CDA', value: stats.cdaWorkingBalance, color: stats.cdaWorkingBalance < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' },
+                        { label: 'Bank Balance', value: stats.bankBalance, color: stats.bankBalance < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' },
+                        { label: 'Working Funds Paid', value: stats.spent, color: 'var(--clr-danger)' },
+                        { label: 'CFL', value: stats.cfl, color: stats.cfl < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' },
+                      ].map(sub => (
+                        <div key={sub.label} className="flex justify-between items-center" style={{ fontSize: '0.75rem' }}>
+                          <span style={{ color: 'var(--clr-text-muted)' }}>{sub.label}</span>
+                          <span style={{ fontWeight: 700, color: sub.color }}>₹{formatAmount(sub.value)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                );
+              })}
             </div>
           )}
         </div>
