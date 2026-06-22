@@ -141,6 +141,14 @@ export async function rejectBankTransfer(year, transferId) {
   return normalizeRoot(raw);
 }
 
+export async function updateBankTransferRequest(year, requestNo, requestData) {
+  const raw = await apiFetch(`/years/${encodeURIComponent(year)}/bank-transfers/request/${encodeURIComponent(requestNo)}`, {
+    method: 'PUT',
+    body: JSON.stringify(requestData),
+  });
+  return normalizeRoot(raw);
+}
+
 // ── Vendor Bills ──────────────────────────────────────────────
 
 export async function recordVendorBill(year, billData) {

@@ -125,4 +125,77 @@ router.patch('/:id/reject', (req, res) => {
   }
 });
 
+// PUT /api/years/:year/bank-transfers/request/:requestNo
+router.put('/request/:requestNo', (req, res) => {
+  try {
+    const db = getDb();
+    const { year, requestNo } = req.params;
+    const { date, requestedBy, purpose, remarks, items } = req.body;
+
+    if (!requestedBy?.trim()) {
+      return res.status(400).json({ error: 'Requested by is required.' });
+    }
+
+    const fy = db.prepare('SELECT * FROM financial_years WHERE year = ?').get(year);
+    if (!fy) return res.status(404).json({ error: 'Year not found.' });
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one request item is required.' });
+    }
+
+    // Validate items first
+    for (const item of items) {
+      const parsedAmt = parseFloat(item.amount);
+      if (isNaN(parsedAmt) || parsedAmt <= 0) {
+        return res.status(400).json({ error: 'All item amounts must be greater than zero.' });
+      }
+      if (!item.codeHeadId) {
+        return res.status(400).json({ error: 'Each item must have a code head.' });
+      }
+    }
+
+    // Check if any of these transfers are already approved
+    const checkStmt = db.prepare('SELECT status FROM bank_transfers WHERE year = ? AND request_no = ?');
+    const existingTransfers = checkStmt.all(year, requestNo);
+    if (existingTransfers.some(t => t.status === 'approved')) {
+      return res.status(400).json({ error: 'Cannot edit a request that has already been approved.' });
+    }
+
+    // Execute update as transaction
+    const updateRequest = db.transaction((itemList) => {
+      // Delete old pending transfers for this requestNo
+      db.prepare('DELETE FROM bank_transfers WHERE year = ? AND request_no = ? AND status = "pending"').run(year, requestNo);
+
+      // Insert new ones
+      const insertStmt = db.prepare(`
+        INSERT INTO bank_transfers (year, date, request_no, code_head_id, requested_by, purpose, amount, remarks, status, timestamp_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      let idx = 0;
+      for (const item of itemList) {
+        const parsedAmt = parseFloat(item.amount);
+        insertStmt.run(
+          year,
+          date || new Date().toISOString().split('T')[0],
+          requestNo,
+          item.codeHeadId,
+          requestedBy.trim(),
+          (purpose || 'Funds requested from CDA').trim(),
+          parsedAmt,
+          (remarks || '').trim(),
+          'pending',
+          Date.now() + (idx++)
+        );
+      }
+    });
+
+    updateRequest(items);
+
+    res.json(buildFullState(db));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

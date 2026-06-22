@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   formatAmount,
   formatAmountNoDecimals,
   recordBankTransfer,
   approveBankTransfer,
   rejectBankTransfer,
+  updateBankTransferRequest,
   getBankBalance,
   getBankLedgerRows,
   getCdaWorkingBalance,
@@ -30,6 +31,7 @@ const emptyRequest = () => ({
 
 export default function MyBank({ state: yd, root, year, onRootChange }) {
   const [form, setForm] = useState(emptyRequest());
+  const [editingGroup, setEditingGroup] = useState(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -53,6 +55,28 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
   const ledgerRows = getBankLedgerRows(yd);
   const codeHeads = yd.codeHeads || [];
   const requestableCodeHeads = codeHeads.filter(ch => getCodeHeadStats(yd, ch.id).workingAllocated > 0);
+
+  // Group pending transfers by requestNo
+  const pendingGroups = useMemo(() => {
+    const groups = {};
+    for (const t of pendingTransfers) {
+      const key = t.requestNo || `REQ-${t.id}`;
+      if (!groups[key]) {
+        groups[key] = {
+          requestNo: key,
+          date: t.date,
+          requestedBy: t.requestedBy,
+          purpose: t.purpose,
+          remarks: t.remarks,
+          items: [],
+          totalAmount: 0,
+        };
+      }
+      groups[key].items.push(t);
+      groups[key].totalAmount += parseFloat(t.amount) || 0;
+    }
+    return Object.values(groups);
+  }, [pendingTransfers]);
 
   const handleChange = (field, value) => {
     setError('');
@@ -88,25 +112,112 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
     });
   };
 
-  const handleApprove = async (id, amount) => {
+  const handleApproveGroup = async (group) => {
     try {
-      const newRoot = await approveBankTransfer(year, id);
-      onRootChange(newRoot);
-      setSuccess(`Requisition of ₹${formatAmount(amount)} approved and credited to bank.`);
+      let lastRoot = null;
+      for (const item of group.items) {
+        lastRoot = await approveBankTransfer(year, item.id);
+      }
+      if (lastRoot) onRootChange(lastRoot);
+      setSuccess(`Request sheet ${group.requestNo} (total ₹${formatAmount(group.totalAmount)}) approved and credited.`);
       setError('');
     } catch (e) {
       setError(e.message);
     }
   };
 
-  const handleReject = async (id, amount) => {
+  const handleRejectGroup = async (group) => {
     try {
-      const newRoot = await rejectBankTransfer(year, id);
-      onRootChange(newRoot);
-      setSuccess(`Requisition of ₹${formatAmount(amount)} rejected/removed.`);
+      let lastRoot = null;
+      for (const item of group.items) {
+        lastRoot = await rejectBankTransfer(year, item.id);
+      }
+      if (lastRoot) onRootChange(lastRoot);
+      setSuccess(`Request sheet ${group.requestNo} rejected and removed.`);
       setError('');
     } catch (e) {
       setError(e.message);
+    }
+  };
+
+  const startEdit = (group) => {
+    setError('');
+    setSuccess('');
+    setEditingGroup({
+      requestNo: group.requestNo,
+      date: group.date,
+      requestedBy: group.requestedBy,
+      purpose: group.purpose || '',
+      remarks: group.remarks || '',
+      items: group.items.map(t => ({ codeHeadId: t.codeHeadId, amount: String(t.amount) })),
+    });
+  };
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    if (!editingGroup.requestedBy.trim()) { setError('Requested by is required.'); return; }
+    if (!editingGroup.items || editingGroup.items.length === 0) { setError('At least one request item is required.'); return; }
+
+    const selectedHeads = new Set();
+    let totalEditAmount = 0;
+
+    for (let i = 0; i < editingGroup.items.length; i++) {
+      const item = editingGroup.items[i];
+      if (!item.codeHeadId) {
+        setError(`Please select a code head for row ${i + 1}.`);
+        return;
+      }
+      if (selectedHeads.has(item.codeHeadId)) {
+        const duplicateHead = codeHeads.find(ch => ch.id === item.codeHeadId);
+        setError(`Duplicate code head selected: "${duplicateHead?.name || item.codeHeadId}" is requested multiple times.`);
+        return;
+      }
+      selectedHeads.add(item.codeHeadId);
+
+      const parsedAmt = parseFloat(item.amount);
+      if (isNaN(parsedAmt) || parsedAmt <= 0) {
+        setError(`Please enter a valid amount greater than zero for row ${i + 1}.`);
+        return;
+      }
+      totalEditAmount += parsedAmt;
+
+      // Check code head availability
+      const dbItem = pendingTransfers.find(t => t.requestNo === editingGroup.requestNo && t.codeHeadId === item.codeHeadId);
+      const originalAmt = dbItem ? parseFloat(dbItem.amount) : 0;
+      const codeHeadAvailable = getCodeHeadCdaWorkingBalance(yd, item.codeHeadId) + originalAmt;
+      if (parsedAmt > codeHeadAvailable) {
+        const head = codeHeads.find(ch => ch.id === item.codeHeadId);
+        setError(`Request amount for "${head?.name || item.codeHeadId}" (₹${formatAmount(parsedAmt)}) exceeds available limit of ₹${formatAmount(codeHeadAvailable)}.`);
+        return;
+      }
+    }
+
+    const originalGroupAmt = pendingTransfers
+      .filter(t => t.requestNo === editingGroup.requestNo)
+      .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+
+    const cdaWorkingAvailable = cdaWorkingBalance + originalGroupAmt;
+    if (totalEditAmount > cdaWorkingAvailable) {
+      setError(`Total request (₹${formatAmount(totalEditAmount)}) exceeds Working Funds available with CDA (₹${formatAmount(cdaWorkingAvailable)}).`);
+      return;
+    }
+
+    const netLimitAvailable = netLimitRemaining + originalGroupAmt;
+    if (totalEditAmount > netLimitAvailable) {
+      setError(`Total request (₹${formatAmount(totalEditAmount)}) exceeds army bank limit. Available capacity is ₹${formatAmount(netLimitAvailable)}.`);
+      return;
+    }
+
+    try {
+      const newRoot = await updateBankTransferRequest(year, editingGroup.requestNo, editingGroup);
+      onRootChange(newRoot);
+      setSuccess(`Request sheet ${editingGroup.requestNo} updated successfully.`);
+      setEditingGroup(null);
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    }
+  };ge);
     }
   };
 
@@ -498,12 +609,12 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
             <p className="section-sub">Approve pending requisitions to credit them to the Army Bank Account</p>
           </div>
           <div className="flex gap-sm">
-            <span className="badge badge-warning">{pendingTransfers.length} Pending</span>
+            <span className="badge badge-warning">{pendingGroups.length} Pending Requisitions</span>
             <span className="badge badge-success">{approvedTransfers.length} Approved</span>
           </div>
         </div>
 
-        {pendingTransfers.length === 0 ? (
+        {pendingGroups.length === 0 ? (
           <div className="empty-state" style={{ padding: '1.5rem' }}>
             <div className="empty-state-icon">📋</div>
             <h3>No Pending Requisitions</h3>
@@ -516,37 +627,57 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
                 <tr>
                   <th>Date</th>
                   <th>Request No</th>
-                  <th>Code Head</th>
                   <th>Requested By</th>
                   <th>Purpose</th>
-                  <th>Amount (₹)</th>
+                  <th>Heads & Amounts Requested</th>
+                  <th>Total Amount (₹)</th>
                   <th className="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {pendingTransfers.map(t => {
-                  const ch = codeHeads.find(item => item.id === t.codeHeadId);
+                {pendingGroups.map(group => {
                   return (
-                    <tr key={t.id}>
-                      <td className="bold">{t.date}</td>
-                      <td style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{t.requestNo}</td>
-                      <td className="bold">{ch ? `${ch.icon} ${ch.name}` : '—'}</td>
-                      <td>{t.requestedBy}</td>
-                      <td className="muted">{t.purpose}</td>
-                      <td className="bold" style={{ color: 'var(--clr-accent)' }}>₹{formatAmount(t.amount)}</td>
+                    <tr key={group.requestNo}>
+                      <td className="bold">{group.date}</td>
+                      <td style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{group.requestNo}</td>
+                      <td>{group.requestedBy}</td>
+                      <td className="muted">{group.purpose}</td>
+                      <td>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.78rem' }}>
+                          {group.items.map(item => {
+                            const ch = codeHeads.find(c => c.id === item.codeHeadId);
+                            return (
+                              <div key={item.id} style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
+                                <span style={{ fontWeight: 500 }}>{ch ? `${ch.icon} ${ch.code}` : '—'}</span>
+                                <span className="muted">:</span>
+                                <span style={{ fontWeight: 700, color: 'var(--clr-text-muted)' }}>₹{formatAmount(item.amount)}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                      <td className="bold" style={{ color: 'var(--clr-accent)', fontSize: '0.92rem' }}>₹{formatAmount(group.totalAmount)}</td>
                       <td className="text-right">
                         <div className="flex gap-sm" style={{ justifyContent: 'flex-end' }}>
                           <button
-                            id={`approve-btn-${t.id}`}
+                            id={`approve-group-btn-${group.requestNo}`}
                             className="btn btn-success btn-sm"
-                            onClick={() => handleApprove(t.id, t.amount)}
+                            onClick={() => handleApproveGroup(group)}
                           >
                             ✓ Approve
                           </button>
                           <button
-                            id={`reject-btn-${t.id}`}
+                            id={`edit-group-btn-${group.requestNo}`}
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => startEdit(group)}
+                            style={{ color: 'var(--clr-primary)', borderColor: 'var(--clr-border-active)' }}
+                          >
+                            ✏️ Edit
+                          </button>
+                          <button
+                            id={`reject-group-btn-${group.requestNo}`}
                             className="btn btn-danger btn-sm"
-                            onClick={() => handleReject(t.id, t.amount)}
+                            onClick={() => handleRejectGroup(group)}
                           >
                             ✕ Reject
                           </button>
@@ -699,6 +830,148 @@ export default function MyBank({ state: yd, root, year, onRootChange }) {
           </div>
         )}
       </div>
+
+      {editingGroup && (
+        <div className="modal-overlay">
+          <div className="modal-box" style={{ maxWidth: '600px' }}>
+            <div className="modal-header">
+              <h3 className="modal-title">Edit Request: {editingGroup.requestNo}</h3>
+              <button className="modal-close" onClick={() => setEditingGroup(null)}>✕</button>
+            </div>
+            
+            <form onSubmit={handleSaveEdit} className="form-section mt-md">
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Request Date *</label>
+                  <input type="date" className="form-input"
+                    value={editingGroup.date} 
+                    onChange={e => setEditingGroup(prev => ({ ...prev, date: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Requested By *</label>
+                  <input className="form-input"
+                    value={editingGroup.requestedBy} 
+                    onChange={e => setEditingGroup(prev => ({ ...prev, requestedBy: e.target.value }))} />
+                </div>
+              </div>
+
+              <div style={{ marginTop: '1rem', marginBottom: '1.5rem' }}>
+                <div className="flex justify-between items-center" style={{ marginBottom: '0.5rem' }}>
+                  <label className="form-label" style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: 0 }}>
+                    Requested Heads and Amounts *
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setEditingGroup(prev => ({ ...prev, items: [...prev.items, { codeHeadId: '', amount: '' }] }))}
+                    style={{ color: 'var(--clr-primary)', fontWeight: 600, padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
+                  >
+                    ➕ Add Row
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxHeight: '240px', overflowY: 'auto', paddingRight: '4px' }}>
+                  {editingGroup.items.map((item, idx) => {
+                    const itemAmt = parseFloat(item.amount) || 0;
+                    const dbItem = pendingTransfers.find(t => t.requestNo === editingGroup.requestNo && t.codeHeadId === item.codeHeadId);
+                    const originalAmt = dbItem ? parseFloat(dbItem.amount) : 0;
+                    const itemCHAvailable = item.codeHeadId ? getCodeHeadCdaWorkingBalance(yd, item.codeHeadId) + originalAmt : 0;
+                    const itemCHAfter = itemCHAvailable - itemAmt;
+
+                    return (
+                      <div key={idx} className="card-glass" style={{ padding: '0.6rem', border: '1px solid var(--clr-border)' }}>
+                        <div className="flex gap-sm" style={{ alignItems: 'center' }}>
+                          <div className="form-group" style={{ flex: 2, marginBottom: 0 }}>
+                            <select
+                              className="form-select"
+                              value={item.codeHeadId}
+                              onChange={e => {
+                                const newItems = editingGroup.items.map((it, i) => i === idx ? { ...it, codeHeadId: e.target.value } : it);
+                                setEditingGroup(prev => ({ ...prev, items: newItems }));
+                              }}
+                            >
+                              <option value="">— Select Code Head —</option>
+                              {requestableCodeHeads.map(ch => {
+                                const stats = getCodeHeadStats(yd, ch.id);
+                                const isAlreadySelected = editingGroup.items.some((otherItem, otherIdx) => otherIdx !== idx && otherItem.codeHeadId === ch.id);
+                                return (
+                                  <option key={ch.id} value={ch.id} disabled={isAlreadySelected}>
+                                    {ch.icon} {ch.name} ({ch.code}) - Avail: ₹{formatAmount(stats.cdaWorkingBalance + (dbItem && dbItem.codeHeadId === ch.id ? originalAmt : 0))}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                          <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+                            <input
+                              type="number"
+                              className="form-input"
+                              min="0.01"
+                              step="any"
+                              placeholder="Amount"
+                              value={item.amount}
+                              onChange={e => {
+                                const newItems = editingGroup.items.map((it, i) => i === idx ? { ...it, amount: e.target.value } : it);
+                                setEditingGroup(prev => ({ ...prev, items: newItems }));
+                              }}
+                            />
+                          </div>
+                          {editingGroup.items.length > 1 && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost"
+                              onClick={() => {
+                                const newItems = editingGroup.items.filter((_, i) => i !== idx);
+                                setEditingGroup(prev => ({ ...prev, items: newItems }));
+                              }}
+                              style={{ padding: '0.4rem', color: 'var(--clr-danger)' }}
+                            >
+                              🗑️
+                            </button>
+                          )}
+                        </div>
+                        {item.amount && item.codeHeadId && (
+                          <div className="flex justify-between items-center" style={{ marginTop: '0.25rem', fontSize: '0.7rem' }}>
+                            <span style={{ color: itemCHAfter < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' }}>
+                              CDA balance after request: ₹{formatAmount(itemCHAfter)} {itemCHAfter < 0 ? '⚠️ Exceeds limit' : '✓ OK'}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Purpose</label>
+                <input className="form-input"
+                  value={editingGroup.purpose} 
+                  onChange={e => setEditingGroup(prev => ({ ...prev, purpose: e.target.value }))} />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Remarks</label>
+                <textarea className="form-textarea" rows={2}
+                  value={editingGroup.remarks} 
+                  onChange={e => setEditingGroup(prev => ({ ...prev, remarks: e.target.value }))} />
+              </div>
+
+              <div className="flex justify-between items-center card-glass" style={{ padding: '0.75rem', fontSize: '0.9rem' }}>
+                <span><strong>Total Edited Amount:</strong></span>
+                <strong style={{ color: 'var(--clr-accent)' }}>
+                  ₹{formatAmount(editingGroup.items.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0))}
+                </strong>
+              </div>
+
+              <div className="flex gap-md mt-lg" style={{ justifyContent: 'flex-end' }}>
+                <button type="submit" className="btn btn-primary">Save Changes</button>
+                <button type="button" className="btn btn-ghost" onClick={() => setEditingGroup(null)}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
