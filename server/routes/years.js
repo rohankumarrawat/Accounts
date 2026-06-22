@@ -3,35 +3,8 @@ import { getDb, buildFullState } from '../db.js';
 
 const router = Router();
 
-// GET /api/data — load full state
-router.get('/', (req, res) => {
-  try {
-    const db = getDb();
-    res.json(buildFullState(db));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// DELETE /api/data — clear everything
-router.delete('/', (req, res) => {
-  try {
-    const db = getDb();
-    db.exec(`
-      DELETE FROM transactions;
-      DELETE FROM bank_transfers;
-      DELETE FROM allotment_history;
-      DELETE FROM code_heads;
-      DELETE FROM financial_years;
-    `);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // POST /api/years — create a new financial year
-router.post('/years', (req, res) => {
+router.post('/', (req, res) => {
   try {
     const { year } = req.body;
     if (!year?.trim()) return res.status(400).json({ error: 'Financial year is required.' });
@@ -53,7 +26,7 @@ router.post('/years', (req, res) => {
 });
 
 // PATCH /api/years/:year/activate
-router.patch('/years/:year/activate', (req, res) => {
+router.patch('/:year/activate', (req, res) => {
   try {
     const db = getDb();
     const fy = db.prepare('SELECT year FROM financial_years WHERE year = ?').get(req.params.year);
@@ -68,7 +41,7 @@ router.patch('/years/:year/activate', (req, res) => {
 });
 
 // DELETE /api/years/:year
-router.delete('/years/:year', (req, res) => {
+router.delete('/:year', (req, res) => {
   try {
     const db = getDb();
     db.prepare('DELETE FROM financial_years WHERE year = ?').run(req.params.year);
@@ -84,7 +57,7 @@ router.delete('/years/:year', (req, res) => {
 });
 
 // POST /api/years/:year/sanction
-router.post('/years/:year/sanction', (req, res) => {
+router.post('/:year/sanction', (req, res) => {
   try {
     const db = getDb();
     const { sanctionNo, sanctionDate, issuingAuthority, depotName, financialYear } = req.body;

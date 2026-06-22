@@ -16,8 +16,34 @@ const PORT = 3001;
 app.use(cors({ origin: 'http://localhost:5173' }));
 app.use(express.json());
 
+import { getDb, buildFullState } from './db.js';
+
 // ── Routes ─────────────────────────────────────────────────────
-app.use('/api/data', yearsRouter);
+app.get('/api/data', (req, res) => {
+  try {
+    const db = getDb();
+    res.json(buildFullState(db));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/data', (req, res) => {
+  try {
+    const db = getDb();
+    db.exec(`
+      DELETE FROM transactions;
+      DELETE FROM bank_transfers;
+      DELETE FROM allotment_history;
+      DELETE FROM code_heads;
+      DELETE FROM financial_years;
+    `);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.use('/api/years', yearsRouter);
 app.use('/api/years/:year/code-heads', codeHeadsRouter);
 app.use('/api/years/:year/bank-transfers', bankTransfersRouter);
