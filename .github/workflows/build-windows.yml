@@ -9,6 +9,8 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      GYP_MSVS_VERSION: 2022
 
     steps:
       - name: Checkout repository
@@ -22,6 +24,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          npm config set msvs_version 2022
           npm install
 
       - name: Build React frontend
@@ -39,6 +42,7 @@ jobs:
       - name: Install production dependencies in package
         working-directory: cda-budget-app
         run: |
+          npm config set msvs_version 2022
           npm install --omit=dev
 
       - name: Copy Node.js executable
