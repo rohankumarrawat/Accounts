@@ -8,8 +8,12 @@ import {
 
 const emptyForm = (date) => ({
   vendorName: '', billNo: '',
+  dateMode: 'single',
   date: date || new Date().toISOString().split('T')[0],
+  startDate: date || new Date().toISOString().split('T')[0],
+  endDate: date || new Date().toISOString().split('T')[0],
   codeHeadId: '', amount: '', workingAmount: '', cdaAmount: '', description: '', remarks: '',
+  iafsNo: '', billNoDt: '',
 });
 
 export default function VendorBilling({ state: yd, root, year, onRootChange }) {
@@ -57,17 +61,24 @@ export default function VendorBilling({ state: yd, root, year, onRootChange }) {
   const validate = () => {
     if (!form.vendorName.trim()) return 'Vendor name is required.';
     if (!form.billNo.trim()) return 'PV No is required.';
-    if ((yd.transactions || []).some(t => (t.billNo || '').trim().toLowerCase() === form.billNo.trim().toLowerCase()))
-      return `PV No "${form.billNo.trim()}" already exists.`;
-    if (!form.date) return 'Date is required.';
+    
+    
+    if (form.dateMode === 'range') {
+      if (!form.startDate) return 'Start date is required.';
+      if (!form.endDate) return 'End date is required.';
+      if (form.startDate > form.endDate) return 'Start date cannot be after end date.';
+    } else {
+      if (!form.date) return 'Date is required.';
+    }
+
     if (!form.codeHeadId) return 'Please select a Code Head.';
     if (isSplitCodeHead) {
       if (!form.workingAmount || workingAmt <= 0) return 'Enter a valid Working Funds amount.';
       if (!form.cdaAmount || cdaAmt <= 0) return 'Enter a valid CDA Retention amount.';
       if (workingAmt > availableCFL)
         return `Working Funds amount exceeds available CFL (₹${formatAmount(availableCFL)}).`;
-      if (workingAmt > codeHeadBankBalance)
-        return `Selected code head bank balance is insufficient (₹${formatAmount(codeHeadBankBalance)}). Request funds from CDA in My Bank for this code head.`;
+      if (workingAmt > bankBalance)
+        return `Selected Army Bank Balance is insufficient (₹${formatAmount(bankBalance)}). Request funds in My Bank.`;
       if (cdaAmt > codeHeadCdaBalance)
         return `CDA amount exceeds this code head's CDA balance (₹${formatAmount(codeHeadCdaBalance)}).`;
       if (cdaAmt > availableCda)
@@ -76,8 +87,8 @@ export default function VendorBilling({ state: yd, root, year, onRootChange }) {
       if (!form.amount || workingAmt <= 0) return 'Enter a valid bill amount.';
       if (workingAmt > availableCFL)
         return `Amount exceeds available CFL (₹${formatAmount(availableCFL)}).`;
-      if (workingAmt > codeHeadBankBalance)
-        return `Selected code head bank balance is insufficient (₹${formatAmount(codeHeadBankBalance)}). Request funds from CDA in My Bank for this code head.`;
+      if (workingAmt > bankBalance)
+        return `Selected Army Bank Balance is insufficient (₹${formatAmount(bankBalance)}). Request funds in My Bank.`;
     }
     return null;
   };
@@ -91,10 +102,14 @@ export default function VendorBilling({ state: yd, root, year, onRootChange }) {
 
   const confirmPayment = async () => {
     try {
-      const newRoot = await recordVendorBill(year, form);
+      const payload = {
+        ...form,
+        date: form.dateMode === 'range' ? `${form.startDate} to ${form.endDate}` : form.date,
+      };
+      const newRoot = await recordVendorBill(year, payload);
       onRootChange(newRoot);
       setSuccess(`✅ Payment of ₹${formatAmount(billAmt)} to ${form.vendorName} recorded.`);
-      setForm(emptyForm(form.date));
+      setForm(emptyForm(form.dateMode === 'range' ? form.startDate : form.date));
       setShowConfirm(false);
       setError('');
     } catch (e) {
@@ -158,9 +173,25 @@ export default function VendorBilling({ state: yd, root, year, onRootChange }) {
 
             <div className="form-row">
               <div className="form-group">
-                <label className="form-label" htmlFor="bill-date">Bill Date *</label>
-                <input id="bill-date" type="date" className="form-input"
-                  value={form.date} onChange={e => handleChange('date', e.target.value)} />
+                <label className="form-label">Date Type *</label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${form.dateMode === 'single' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ flex: 1, padding: '0.5rem', textTransform: 'none' }}
+                    onClick={() => handleChange('dateMode', 'single')}
+                  >
+                    Particular Date
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${form.dateMode === 'range' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ flex: 1, padding: '0.5rem', textTransform: 'none' }}
+                    onClick={() => handleChange('dateMode', 'range')}
+                  >
+                    Date Range
+                  </button>
+                </div>
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="bill-codehead">Code Head *</label>
@@ -179,6 +210,40 @@ export default function VendorBilling({ state: yd, root, year, onRootChange }) {
               </div>
             </div>
 
+            {form.dateMode === 'single' ? (
+              <div className="form-group">
+                <label className="form-label" htmlFor="bill-date">Bill Date *</label>
+                <input id="bill-date" type="date" className="form-input"
+                  value={form.date} onChange={e => handleChange('date', e.target.value)} />
+              </div>
+            ) : (
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label" htmlFor="bill-start-date">Start Date *</label>
+                  <input id="bill-start-date" type="date" className="form-input"
+                    value={form.startDate} onChange={e => handleChange('startDate', e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="bill-end-date">End Date *</label>
+                  <input id="bill-end-date" type="date" className="form-input"
+                    value={form.endDate} onChange={e => handleChange('endDate', e.target.value)} />
+                </div>
+              </div>
+            )}
+
+            <div className="form-row">
+              <div className="form-group">
+                <label className="form-label" htmlFor="bill-iafs">IAFS-1520 / IAFZ-2135</label>
+                <input id="bill-iafs" className="form-input" placeholder="e.g. IAFS-1520/2026/001"
+                  value={form.iafsNo} onChange={e => handleChange('iafsNo', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="bill-invoice-no-dt">Bill No & Dt</label>
+                <input id="bill-invoice-no-dt" className="form-input" placeholder="e.g. Bill-456 Dt. 20/06/2026"
+                  value={form.billNoDt} onChange={e => handleChange('billNoDt', e.target.value)} />
+              </div>
+            </div>
+
             {selectedCH && !isSplitCodeHead && (
               <div className="form-group">
                 <label className="form-label" htmlFor="bill-amount">Bill Amount (₹) *</label>
@@ -191,8 +256,8 @@ export default function VendorBilling({ state: yd, root, year, onRootChange }) {
                   </span>
                 )}
                 {form.amount && (
-                  <span className="form-hint" style={{ color: codeHeadBankBalanceAfter < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' }}>
-                    Code head bank balance after payment: ₹{formatAmount(codeHeadBankBalanceAfter)} {codeHeadBankBalanceAfter < 0 ? '⚠️ Request funds for this code head' : '✓ Available'}
+                  <span className="form-hint" style={{ color: bankBalanceAfter < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' }}>
+                    Army Bank Balance after payment: ₹{formatAmount(bankBalanceAfter)} {bankBalanceAfter < 0 ? '⚠️ Request funds in My Bank' : '✓ Available'}
                   </span>
                 )}
               </div>
@@ -219,8 +284,8 @@ export default function VendorBilling({ state: yd, root, year, onRootChange }) {
                         </span>
                       )}
                       {form.workingAmount && (
-                        <span className="form-hint" style={{ color: codeHeadBankBalanceAfter < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' }}>
-                          Code head bank balance after payment: ₹{formatAmount(codeHeadBankBalanceAfter)} {codeHeadBankBalanceAfter < 0 ? '⚠️ Request funds for this code head' : '✓ Available'}
+                        <span className="form-hint" style={{ color: bankBalanceAfter < 0 ? 'var(--clr-danger)' : 'var(--clr-success)' }}>
+                          Army Bank Balance after payment: ₹{formatAmount(bankBalanceAfter)} {bankBalanceAfter < 0 ? '⚠️ Request funds in My Bank' : '✓ Available'}
                         </span>
                       )}
                     </div>
@@ -341,7 +406,9 @@ export default function VendorBilling({ state: yd, root, year, onRootChange }) {
               {[
                 { label: 'Vendor', value: form.vendorName },
                 { label: 'PV No', value: form.billNo },
-                { label: 'Date', value: form.date },
+                { label: 'Date', value: form.dateMode === 'range' ? `${form.startDate} to ${form.endDate}` : form.date },
+                ...(form.iafsNo ? [{ label: 'IAFS-1520 / IAFZ-2135', value: form.iafsNo }] : []),
+                ...(form.billNoDt ? [{ label: 'Bill No & Dt', value: form.billNoDt }] : []),
                 { label: 'Code Head', value: selectedCH ? `${selectedCH.icon} ${selectedCH.name}` : '' },
                 { label: 'Total Bill Amount', value: `₹${formatAmount(billAmt)}`, big: true },
                 ...splitRows.map(row => ({

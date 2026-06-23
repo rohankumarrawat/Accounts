@@ -172,6 +172,15 @@ app.use('/api/years/:year/transactions', transactionsRouter);
 // ── Health check ───────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ ok: true, timestamp: Date.now() }));
 
+// Serve static files from React frontend build in production
+const distPath = path.join(__dirname, '../dist');
+app.use(express.static(distPath));
+
+// For all non-API routes, serve React index.html
+app.get(/^(?!\/api).*$/, (req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
+
 // ── Start ──────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`\n✅ CDA Budget API running at http://localhost:${PORT}`);

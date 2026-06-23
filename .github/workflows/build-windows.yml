@@ -1,0 +1,65 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm install
+
+      - name: Build React frontend
+        run: |
+          npm run build
+
+      - name: Prepare portable package directory
+        run: |
+          mkdir cda-budget-app
+          xcopy /E /I dist cda-budget-app\dist
+          xcopy /E /I server cda-budget-app\server
+          copy package.json cda-budget-app\
+          copy package-lock.json cda-budget-app\
+
+      - name: Install production dependencies in package
+        working-directory: cda-budget-app
+        run: |
+          npm install --omit=dev
+
+      - name: Copy Node.js executable
+        run: |
+          copy (where.exe node) cda-budget-app\node.exe
+
+      - name: Create run batch file
+        run: |
+          echo @echo off > cda-budget-app\run.bat
+          echo title CDA Budget Workflow System >> cda-budget-app\run.bat
+          echo echo Starting CDA Budget Workflow System... >> cda-budget-app\run.bat
+          echo start "" "http://localhost:3001" >> cda-budget-app\run.bat
+          echo node.exe server/index.js >> cda-budget-app\run.bat
+          echo pause >> cda-budget-app\run.bat
+
+      - name: Zip package
+        run: |
+          Compress-Archive -Path cda-budget-app -DestinationPath cda-budget-windows.zip
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cda-budget-windows
+          path: cda-budget-windows.zip

@@ -83,10 +83,24 @@ function initSchema(db) {
       cda_amount     REAL    NOT NULL DEFAULT 0,
       split_mode     TEXT    NOT NULL DEFAULT 'full',
       remarks        TEXT    NOT NULL DEFAULT '',
+      iafs_no        TEXT    NOT NULL DEFAULT '',
+      bill_no_dt     TEXT    NOT NULL DEFAULT '',
       timestamp_ms   INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (year) REFERENCES financial_years(year) ON DELETE CASCADE
     );
   `);
+
+  // Migration for new columns
+  try {
+    db.exec("ALTER TABLE transactions ADD COLUMN iafs_no TEXT NOT NULL DEFAULT ''");
+  } catch (e) {
+    // Column already exists, ignore
+  }
+  try {
+    db.exec("ALTER TABLE transactions ADD COLUMN bill_no_dt TEXT NOT NULL DEFAULT ''");
+  } catch (e) {
+    // Column already exists, ignore
+  }
 }
 
 // ─── Helper: build the full root object from DB ──────────────────────────────
@@ -163,6 +177,8 @@ export function buildFullState(db) {
         cdaAmount: t.cda_amount,
         splitMode: t.split_mode,
         remarks: t.remarks,
+        iafsNo: t.iafs_no || '',
+        billNoDt: t.bill_no_dt || '',
         timestamp: t.timestamp_ms,
       }));
 

@@ -8,14 +8,12 @@ router.post('/', (req, res) => {
   try {
     const db = getDb();
     const { year } = req.params;
-    const { date, vendorName, billNo, description, codeHeadId, amount, workingAmount, cdaAmount, splitMode, remarks } = req.body;
+    const { date, vendorName, billNo, description, codeHeadId, amount, workingAmount, cdaAmount, splitMode, remarks, iafsNo, billNoDt } = req.body;
 
     if (!vendorName?.trim()) return res.status(400).json({ error: 'Vendor name is required.' });
     if (!billNo?.trim()) return res.status(400).json({ error: 'PV No is required.' });
 
-    // Unique bill no check
-    const dupCheck = db.prepare('SELECT id FROM transactions WHERE year = ? AND LOWER(bill_no) = LOWER(?)').get(year, billNo.trim());
-    if (dupCheck) return res.status(400).json({ error: `PV No "${billNo.trim()}" already exists. PV No must be unique.` });
+
 
     const parsedWorking = parseFloat(workingAmount ?? amount);
     const parsedCda = parseFloat(cdaAmount) || 0;
@@ -25,8 +23,8 @@ router.post('/', (req, res) => {
     if (!fy) return res.status(404).json({ error: 'Year not found.' });
 
     db.prepare(`
-      INSERT INTO transactions (year, date, vendor_name, bill_no, description, code_head_id, amount, working_amount, cda_amount, split_mode, remarks, timestamp_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transactions (year, date, vendor_name, bill_no, description, code_head_id, amount, working_amount, cda_amount, split_mode, remarks, iafs_no, bill_no_dt, timestamp_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       year,
       date || new Date().toISOString().split('T')[0],
@@ -39,6 +37,8 @@ router.post('/', (req, res) => {
       parsedCda,
       splitMode || 'full',
       (remarks || '').trim(),
+      (iafsNo || '').trim(),
+      (billNoDt || '').trim(),
       Date.now()
     );
 
@@ -55,7 +55,7 @@ router.put('/:id', (req, res) => {
   try {
     const db = getDb();
     const { year, id } = req.params;
-    const { date, vendorName, billNo, description, codeHeadId, workingAmount, cdaAmount, splitMode, remarks } = req.body;
+    const { date, vendorName, billNo, description, codeHeadId, workingAmount, cdaAmount, splitMode, remarks, iafsNo, billNoDt } = req.body;
 
     const existing = db.prepare('SELECT * FROM transactions WHERE id = ? AND year = ?').get(parseInt(id), year);
     if (!existing) return res.status(404).json({ error: 'Transaction not found.' });
@@ -63,10 +63,7 @@ router.put('/:id', (req, res) => {
     if (!vendorName?.trim()) return res.status(400).json({ error: 'Vendor name is required.' });
     if (!billNo?.trim()) return res.status(400).json({ error: 'PV No is required.' });
 
-    const dupCheck = db.prepare(
-      'SELECT id FROM transactions WHERE year = ? AND LOWER(bill_no) = LOWER(?) AND id != ?'
-    ).get(year, billNo.trim(), parseInt(id));
-    if (dupCheck) return res.status(400).json({ error: `PV No "${billNo.trim()}" already exists.` });
+
 
     const parsedWorking = parseFloat(workingAmount);
     const parsedCda = parseFloat(cdaAmount) || 0;
@@ -75,7 +72,8 @@ router.put('/:id', (req, res) => {
     db.prepare(`
       UPDATE transactions
       SET date = ?, vendor_name = ?, bill_no = ?, description = ?, code_head_id = ?,
-          amount = ?, working_amount = ?, cda_amount = ?, split_mode = ?, remarks = ?
+          amount = ?, working_amount = ?, cda_amount = ?, split_mode = ?, remarks = ?,
+          iafs_no = ?, bill_no_dt = ?
       WHERE id = ? AND year = ?
     `).run(
       date || existing.date,
@@ -88,6 +86,8 @@ router.put('/:id', (req, res) => {
       parsedCda,
       splitMode || existing.split_mode,
       (remarks || '').trim(),
+      (iafsNo || '').trim(),
+      (billNoDt || '').trim(),
       parseInt(id), year
     );
 

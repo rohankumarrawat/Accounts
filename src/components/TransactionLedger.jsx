@@ -39,7 +39,15 @@ export default function TransactionLedger({ state: yd, root, year, onRootChange 
     txns.sort((a, b) => {
       let va = a[sortField], vb = b[sortField];
       if (sortField === 'amount') { va = parseFloat(va); vb = parseFloat(vb); }
-      if (sortField === 'date') { va = new Date(va).getTime(); vb = new Date(vb).getTime(); }
+      if (sortField === 'date') {
+        const getSortDate = (d) => {
+          if (!d) return 0;
+          const firstPart = d.split(' to ')[0] || d;
+          return new Date(firstPart).getTime() || 0;
+        };
+        va = getSortDate(va);
+        vb = getSortDate(vb);
+      }
       return sortDir === 'asc' ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
     });
     return txns;
@@ -66,17 +74,37 @@ export default function TransactionLedger({ state: yd, root, year, onRootChange 
 
   const startEdit = (txn) => {
     setEditError('');
+    const isRange = (txn.date || '').includes(' to ');
+    const parts = isRange ? txn.date.split(' to ') : [txn.date, txn.date];
     setEditingTxn({
       ...txn,
+      dateMode: isRange ? 'range' : 'single',
+      startDate: parts[0] || txn.date,
+      endDate: parts[1] || parts[0] || txn.date,
       amount: String(getTransactionWorkingAmount(txn)),
       workingAmount: String(getTransactionWorkingAmount(txn)),
       cdaAmount: String(getTransactionCdaAmount(txn)),
+      iafsNo: txn.iafsNo || '',
+      billNoDt: txn.billNoDt || '',
     });
   };
 
   const saveEdit = async () => {
     try {
-      const newRoot = await editTransaction(year, editingTxn.id, editingTxn);
+      if (!editingTxn.vendorName.trim()) { setEditError('Vendor name is required.'); return; }
+      if (!editingTxn.billNo.trim()) { setEditError('PV No is required.'); return; }
+      if (editingTxn.dateMode === 'range') {
+        if (!editingTxn.startDate) { setEditError('Start date is required.'); return; }
+        if (!editingTxn.endDate) { setEditError('End date is required.'); return; }
+        if (editingTxn.startDate > editingTxn.endDate) { setEditError('Start date cannot be after end date.'); return; }
+      } else {
+        if (!editingTxn.date) { setEditError('Date is required.'); return; }
+      }
+      const payload = {
+        ...editingTxn,
+        date: editingTxn.dateMode === 'range' ? `${editingTxn.startDate} to ${editingTxn.endDate}` : editingTxn.date,
+      };
+      const newRoot = await editTransaction(year, editingTxn.id, payload);
       onRootChange(newRoot);
       setEditingTxn(null);
       setEditError('');
@@ -88,9 +116,30 @@ export default function TransactionLedger({ state: yd, root, year, onRootChange 
   return (
     <div>
       <div className="page-header">
-        <h2 className="page-title">Ledger — FY {year}</h2>
-        <p className="page-subtitle">Full history of all vendor payments for the current financial year</p>
+        <div className="flex justify-between items-center">
+          <div>
+            <h2 className="page-title">Ledger — FY {year}</h2>
+            <p className="page-subtitle">Full history of all vendor payments for the current financial year</p>
+          </div>
+          <button id="print-ledger-btn" className="btn btn-ghost no-print" onClick={() => window.print()}>
+            🖨️ Print Ledger (PDF)
+          </button>
+        </div>
       </div>
+
+      {/* Print-only active filters banner */}
+      {(search || filterCH) && (
+        <div className="print-only" style={{ border: '1px solid var(--clr-border)', padding: '10px 14px', marginBottom: '1.5rem', borderRadius: 'var(--r-sm)', background: '#fff', fontSize: '0.78rem' }}>
+          <strong style={{ textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--clr-primary)', display: 'block', marginBottom: '4px' }}>
+            Active Filter Parameters:
+          </strong>
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+            {search && <span><strong>Search Keyword:</strong> "{search}"</span>}
+            {filterCH && <span><strong>Code Head:</strong> {codeHeads.find(c => c.id === filterCH)?.name}</span>}
+            <span><strong>Total Filtered Transactions:</strong> {transactions.length}</span>
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
@@ -116,7 +165,7 @@ export default function TransactionLedger({ state: yd, root, year, onRootChange 
       </div>
 
       {/* Filters */}
-      <div className="card mb-lg">
+      <div className="card mb-lg no-print">
         <div className="flex gap-md items-center" style={{ flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: '200px', maxWidth: '300px', position: 'relative' }}>
             <span style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--clr-text-subtle)' }}>🔍</span>
@@ -174,12 +223,14 @@ export default function TransactionLedger({ state: yd, root, year, onRootChange 
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('date')}>Date<SortIcon field="date" sortField={sortField} sortDir={sortDir} /></th>
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('vendorName')}>Vendor<SortIcon field="vendorName" sortField={sortField} sortDir={sortDir} /></th>
                   <th>PV No</th>
+                  <th>IAFS-1520 / IAFZ-2135</th>
+                  <th>Bill No & Dt</th>
                   <th>Code Head</th>
                   <th>Description</th>
                   <th>Working (₹)</th>
                   <th>CDA (₹)</th>
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('amount')}>Amount (₹)<SortIcon field="amount" sortField={sortField} sortDir={sortDir} /></th>
-                  <th></th>
+                  <th className="no-print"></th>
                 </tr>
               </thead>
               <tbody>
@@ -191,6 +242,8 @@ export default function TransactionLedger({ state: yd, root, year, onRootChange 
                       <td className="bold">{txn.date}</td>
                       <td className="bold">{txn.vendorName}</td>
                       <td style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>{txn.billNo}</td>
+                      <td style={{ fontSize: '0.78rem' }}>{txn.iafsNo || '—'}</td>
+                      <td style={{ fontSize: '0.78rem' }}>{txn.billNoDt || '—'}</td>
                       <td>
                         <span className="badge badge-primary" style={{ fontSize: '0.68rem' }}>
                           {ch ? `${ch.icon} ${ch.name}` : txn.codeHeadId}
@@ -204,7 +257,7 @@ export default function TransactionLedger({ state: yd, root, year, onRootChange 
                         {getTransactionCdaAmount(txn) > 0 ? `₹${formatAmount(getTransactionCdaAmount(txn))}` : '—'}
                       </td>
                       <td className="danger">₹{formatAmount(getTransactionTotalAmount(txn))}</td>
-                      <td>
+                      <td className="no-print">
                         <button
                           id={`edit-txn-${txn.id}`}
                           className="btn btn-ghost btn-sm"
@@ -283,15 +336,31 @@ export default function TransactionLedger({ state: yd, root, year, onRootChange 
                   <label className="form-label">PV No *</label>
                   <input className="form-input" value={editingTxn.billNo}
                     onChange={e => setEditingTxn(v => ({ ...v, billNo: e.target.value }))} />
-                  <span className="form-hint">PV No must be unique and cannot be blank</span>
+                  <span className="form-hint">PV No cannot be blank</span>
                 </div>
               </div>
 
               <div className="form-row">
                 <div className="form-group">
-                  <label className="form-label">Date *</label>
-                  <input type="date" className="form-input" value={editingTxn.date}
-                    onChange={e => setEditingTxn(v => ({ ...v, date: e.target.value }))} />
+                  <label className="form-label">Date Type *</label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${editingTxn.dateMode === 'single' ? 'btn-primary' : 'btn-ghost'}`}
+                      style={{ flex: 1, padding: '0.5rem', textTransform: 'none' }}
+                      onClick={() => setEditingTxn(v => ({ ...v, dateMode: 'single' }))}
+                    >
+                      Particular Date
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${editingTxn.dateMode === 'range' ? 'btn-primary' : 'btn-ghost'}`}
+                      style={{ flex: 1, padding: '0.5rem', textTransform: 'none' }}
+                      onClick={() => setEditingTxn(v => ({ ...v, dateMode: 'range' }))}
+                    >
+                      Date Range
+                    </button>
+                  </div>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Code Head *</label>
@@ -308,6 +377,40 @@ export default function TransactionLedger({ state: yd, root, year, onRootChange 
                       <option key={ch.id} value={ch.id}>{ch.icon} {ch.name} ({ch.code})</option>
                     ))}
                   </select>
+                </div>
+              </div>
+
+              {editingTxn.dateMode === 'single' ? (
+                <div className="form-group">
+                  <label className="form-label">Date *</label>
+                  <input type="date" className="form-input" value={editingTxn.date}
+                    onChange={e => setEditingTxn(v => ({ ...v, date: e.target.value }))} />
+                </div>
+              ) : (
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">Start Date *</label>
+                    <input type="date" className="form-input" value={editingTxn.startDate}
+                      onChange={e => setEditingTxn(v => ({ ...v, startDate: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">End Date *</label>
+                    <input type="date" className="form-input" value={editingTxn.endDate}
+                      onChange={e => setEditingTxn(v => ({ ...v, endDate: e.target.value }))} />
+                  </div>
+                </div>
+              )}
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">IAFS-1520 / IAFZ-2135</label>
+                  <input className="form-input" value={editingTxn.iafsNo || ''}
+                    onChange={e => setEditingTxn(v => ({ ...v, iafsNo: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Bill No & Dt</label>
+                  <input className="form-input" value={editingTxn.billNoDt || ''}
+                    onChange={e => setEditingTxn(v => ({ ...v, billNoDt: e.target.value }))} />
                 </div>
               </div>
 

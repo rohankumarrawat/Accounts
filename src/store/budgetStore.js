@@ -3,7 +3,7 @@
 // API-backed version — all data persisted in SQLite via Express
 // ============================================================
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = window.location.origin === 'http://localhost:5173' ? 'http://localhost:3001/api' : '/api';
 
 // ── API Client ────────────────────────────────────────────────
 
